@@ -449,6 +449,19 @@ def approve_transfer(api_clients_config, transfer_uuid):
         raise environment.EnvironmentError(response["error"])
 
 
+def approve_partial_reingest(api_clients_config, reingest_uuid):
+    response = check_unit_status(api_clients_config, reingest_uuid, "ingest")
+    if response.get("status") == "USER_INPUT":
+        am = configure_am_client(api_clients_config[AM_API_CONFIG_KEY])
+        am.sip_uuid = reingest_uuid
+        response = call_api_endpoint(
+            endpoint=am.approve_partial_reingest, warning_message="", error_message=""
+        )
+        if not response.get("error"):
+            return reingest_uuid
+        raise environment.EnvironmentError(response["error"])
+
+
 def start_reingest(
     api_clients_config,
     transfer_name,
@@ -477,7 +490,11 @@ def start_reingest(
     )
     reingest_uuid = response.get("reingest_uuid")
     time.sleep(environment.MEDIUM_WAIT)
-    return approve_transfer(api_clients_config, reingest_uuid)
+    if reingest_type == "full":
+        approve_helper = approve_transfer
+    else:
+        approve_helper = approve_partial_reingest
+    return approve_helper(api_clients_config, reingest_uuid)
 
 
 def check_unit_status(api_clients_config, unit_uuid, unit="transfer"):
@@ -739,7 +756,16 @@ def get_transfer_result(api_clients_config, transfer_uuid):
     transfer_response = wait_for_transfer(api_clients_config, transfer_uuid)
     if transfer_response["status"] == "FAILED":
         return {}
-    sip_uuid = transfer_response["sip_uuid"]
+    return get_ingest_result(api_clients_config, transfer_response["sip_uuid"])
+
+
+def get_ingest_result(api_clients_config, sip_uuid):
+    """
+    Wait for a started ingest to finish and return:
+      - the SIP UUID
+      - the local directory where the AIP has been extracted to
+      - the METS path
+    """
     ingest_response = wait_for_ingest(api_clients_config, sip_uuid)
     if ingest_response["status"] == "FAILED":
         return {}
@@ -771,17 +797,24 @@ def create_sample_transfer(
     return transfer
 
 
-def create_reingest(api_clients_config, transfer):
+def create_reingest(api_clients_config, transfer, reingest_type):
     if "reingest_aip_mets_location" in transfer:
         return transfer
     result = {}
     try:
         result["reingest_transfer_uuid"] = start_reingest(
-            api_clients_config, transfer["transfer_name"], transfer["sip_uuid"]
+            api_clients_config,
+            transfer["transfer_name"],
+            transfer["sip_uuid"],
+            reingest_type,
         )
     except environment.EnvironmentError as err:
         assert False, "Error starting reingest: {}".format(err)
-    reingest_transfer_result = get_transfer_result(
+    if reingest_type == "full":
+        result_helper = get_transfer_result
+    else:
+        result_helper = get_ingest_result
+    reingest_transfer_result = result_helper(
         api_clients_config, result["reingest_transfer_uuid"]
     )
     if not reingest_transfer_result:

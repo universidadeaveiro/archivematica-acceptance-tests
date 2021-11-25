@@ -50,16 +50,21 @@ def step_impl(context, transfer_type, sample_transfer_path):
 
 
 @given(
-    'a "{transfer_type}" transfer type located in "{sample_transfer_path}" has been reingested'
+    'a "{transfer_type}" transfer type located in "{sample_transfer_path}" has been {reingest_type} reingested'
 )
-def step_impl(context, transfer_type, sample_transfer_path):
+def step_impl(context, transfer_type, sample_transfer_path, reingest_type):
     context.execute_steps(
         'Given a "{}" transfer type located in "{}"\n'.format(
             transfer_type, sample_transfer_path
         )
     )
+    reingest_type = {
+        "fully": "full",
+        "metadata-only": "metadata",
+        "partially": "objects",
+    }.get(reingest_type)
     reingest = utils.create_reingest(
-        context.api_clients_config, context.current_transfer
+        context.api_clients_config, context.current_transfer, reingest_type
     )
     context.current_transfer.update(reingest)
 
@@ -419,12 +424,23 @@ def step_impl(context, job_name):
     valid_exit_codes = valid_exit_codes_by_job_name.get(
         job_name, default_valid_exit_codes
     )
-    utils.assert_jobs_completed_successfully(
-        context.api_clients_config,
-        context.current_transfer["transfer_uuid"],
-        job_name=job_name,
-        valid_exit_codes=valid_exit_codes,
-    )
+    try:
+        utils.assert_jobs_completed_successfully(
+            context.api_clients_config,
+            context.current_transfer["transfer_uuid"],
+            job_name=job_name,
+            valid_exit_codes=valid_exit_codes,
+        )
+    except AssertionError as err:
+        if "sip_uuid" in context.current_transfer:
+            utils.assert_jobs_completed_successfully(
+                context.api_clients_config,
+                context.current_transfer["sip_uuid"],
+                job_name=job_name,
+                valid_exit_codes=valid_exit_codes,
+            )
+        else:
+            raise err
 
 
 @then('the "{job_name}" job fails')
